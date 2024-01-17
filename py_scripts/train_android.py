@@ -23,6 +23,7 @@ import torch.nn as nn
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import hydra
+import mlflow
 from omegaconf import DictConfig, OmegaConf
 
 import gnss_lib.coordinates as coord
@@ -91,6 +92,9 @@ def main(config: DictConfig) -> None:
     "bias_fname": config.bias_fname,
     }
     
+    mlflow.set_tracking_uri(uri="http://ras-b2-ph.nexus.csiro.au:5000")
+    mlflow.set_experiment("Deep GNSS Leo test")
+
     print('Initializing dataset')
     
     dataset = Android_GNSS_Dataset(data_config)
@@ -122,6 +126,7 @@ def main(config: DictConfig) -> None:
     if config.writer:
         writer = SummaryWriter(os.path.join(data_directory, 'runs', fname))
 
+    input_eg = None
 
     min_acc = 1000000
     for epoch in range(config.N_train_epochs):
@@ -133,8 +138,11 @@ def main(config: DictConfig) -> None:
             x = _sample_batched['features'].float().cuda()
             y = _sample_batched['true_correction'].float().cuda()
             pad_mask = pad_mask.cuda()
+            if input_eg is None:
+                input_eg = _sample_batched['features'].float().numpy()
             pred_correction = net(x, pad_mask=pad_mask)
             loss = loss_func(pred_correction, y)
+            mlflow.log_metrics({"train_loss": loss})
             if config.writer:
                 writer.add_scalar("Loss/train", loss, count)
                 
@@ -148,13 +156,17 @@ def main(config: DictConfig) -> None:
         mean_acc, test_loss = test_eval(val_loader, net, loss_func)
         if config.writer:
             writer.add_scalar("Loss/test", test_loss, epoch)
+            mlflow.log_metrics({"test_loss": test_loss})
         for j in range(len(mean_acc[0])):
             if config.writer:
                 writer.add_scalar("Metrics/Acc_"+str(j), mean_acc[0, j], epoch)
+                mlflow.log_metrics({"test_acc": mean_acc[0, j]})
         if np.sum(mean_acc) < min_acc:
             min_acc = np.sum(mean_acc)
             torch.save(net.state_dict(), os.path.join(data_directory, 'weights', fname))
         print('Training done for ', epoch)
+
+    mlflow.pytorch.log_model(net, "model", input_example=input_eg, conda_env=f"{parent_directory}/environment.yml", code_paths=[f"{parent_directory}/src/correction_network"])
 
 if __name__=="__main__":
     main()
