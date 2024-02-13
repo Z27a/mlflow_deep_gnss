@@ -126,8 +126,6 @@ def main(config: DictConfig) -> None:
     if config.writer:
         writer = SummaryWriter(os.path.join(data_directory, 'runs', fname))
 
-    input_eg = None
-
     min_acc = 1000000
     for epoch in range(config.N_train_epochs):
         # TRAIN Phase
@@ -138,8 +136,6 @@ def main(config: DictConfig) -> None:
             x = _sample_batched['features'].float().cuda()
             y = _sample_batched['true_correction'].float().cuda()
             pad_mask = pad_mask.cuda()
-            if input_eg is None:
-                input_eg = _sample_batched['features'].float().numpy()
             pred_correction = net(x, pad_mask=pad_mask)
             loss = loss_func(pred_correction, y)
             mlflow.log_metrics({"train_loss": loss})
@@ -166,7 +162,10 @@ def main(config: DictConfig) -> None:
             torch.save(net.state_dict(), os.path.join(data_directory, 'weights', fname))
         print('Training done for ', epoch)
 
-    mlflow.pytorch.log_model(net, "model", input_example=input_eg, conda_env=f"{parent_directory}/environment.yml", code_paths=[f"{parent_directory}/src/correction_network"])
+    mlflow.pytorch.log_model(net, "model", signature=mlflow.models.ModelSignature.from_dict({
+        "inputs": '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [-1, 1, 4]}}]',
+        "outputs": '[{"type": "tensor", "tensor-spec": {"dtype": "float32", "shape": [1, 3]}}]', "params": None}),
+                             conda_env=f"{parent_directory}/environment.yml", code_paths=[f"{parent_directory}/src/correction_network"])
 
 if __name__=="__main__":
     main()
